@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Android 4.4 in your browser (v86)</title>
+<style>
+:root{color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;background:#0f1115;color:#e6e8ec;font:15px/1.5 system-ui,"Segoe UI",Roboto,sans-serif;display:flex;flex-direction:column;align-items:center;gap:14px;padding:18px}
+h1{font-size:20px;font-weight:600;margin:0}
+.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:center}
+button,label.b{background:#2b6cb0;color:#fff;border:0;border-radius:8px;padding:9px 16px;font:inherit;cursor:pointer}
+button:disabled{opacity:.45;cursor:default}
+button.g{background:#2a2f3a}
+button:focus-visible,label.b:focus-within{outline:2px solid #8ab4f8;outline-offset:2px}
+#status{font-size:14px;color:#a9b0bd;min-height:22px;text-align:center}
+progress{width:260px;vertical-align:middle}
+#screen_container{background:#000;border:1px solid #2a2f3a;border-radius:8px;max-width:100%;overflow:auto;display:none}
+#screen_container canvas{display:block;max-width:100%;height:auto;cursor:crosshair}
+details{max-width:680px;background:#171a21;border-radius:10px;padding:10px 16px;font-size:14px}
+summary{cursor:pointer;font-weight:600}
+code{background:#2a2f3a;padding:1px 5px;border-radius:4px}
+ol{padding-left:20px;margin:8px 0}
+</style>
+</head>
+<body>
+<h1>Android 4.4 (Android-x86) in your browser</h1>
+<div class="bar" id="start">
+  <label class="b">Choose Android-x86 ISO from my computer<input type="file" id="iso" accept=".iso" hidden></label>
+  <button id="hosted" class="g" hidden>Boot hosted image</button>
+</div>
+<div class="bar">
+  <button id="fs" class="g" disabled>Fullscreen</button>
+  <button id="mouse" class="g" disabled>Capture mouse</button>
+  <button id="pause" class="g" disabled>Pause</button>
+  <button id="cad" class="g" disabled>Ctrl+Alt+Del</button>
+  <button id="restart" class="g" disabled>Restart</button>
+</div>
+<div id="status">Choose an ISO to begin.</div>
+<div id="screen_container"><div style="white-space:pre;font:14px monospace;line-height:14px"></div><canvas></canvas></div>
+
+<details open>
+<summary>How to boot it</summary>
+<ol>
+  <li>When the boot menu appears, choose the <b>VESA mode</b> live entry (arrow keys, then Enter). Other modes fail in v86.</li>
+  <li>Boot takes several minutes. This is an x86 PC emulated in WebAssembly, so it is slow.</li>
+  <li>Click the screen and press <b>Capture mouse</b> to control the pointer. Press Esc to release it.</li>
+</ol>
+<p>Only versions up to Android-x86 4.4-r2 are known to work with v86. Newer Android versions will not boot.</p>
+</details>
+
+<script>
+/* ===== Configuration (edit these) ===== */
+const CFG = {
+  // Loaded from the v86 npm package on jsDelivr. To self-host, download these four files and use local paths.
+  lib:  "https://cdn.jsdelivr.net/npm/v86@latest/build/libv86.js",
+  wasm: "https://cdn.jsdelivr.net/npm/v86@latest/build/v86.wasm",
+  bios: "bios/seabios.bin",
+  vga:  "bios/vgabios.bin",
+  hostedIso: "",                // optional: URL of an ISO you host (must support Range requests, CORS-enabled)
+  hostedSize: 0,                // size in bytes of the hosted ISO (required if hostedIso is set)
+  memoryMB: 1024,
+  vgaMB: 16
+};
+/* ======================================= */
+
+const $ = s => document.querySelector(s);
+const status = t => $('#status').textContent = t;
+let emu = null, running = false;
+
+function loadLib(){
+  return new Promise((ok, fail) => {
+    if (window.V86 || window.V86Starter) return ok();
+    const s = document.createElement('script');
+    s.src = CFG.lib; s.onload = ok;
+    s.onerror = () => fail(new Error('Could not load ' + CFG.lib + '. Put libv86.js there (see the instructions).'));
+    document.head.appendChild(s);
+  });
+}
+
+async function boot(cdrom){
+  try{
+    status('Loading emulator…');
+    await loadLib();
+    const V = window.V86 || window.V86Starter;
+    $('#start').style.display = 'none';
+    $('#screen_container').style.display = 'block';
+    emu = new V({
+      wasm_path: CFG.wasm,
+      memory_size: CFG.memoryMB * 1024 * 1024,
+      vga_memory_size: CFG.vgaMB * 1024 * 1024,
+      screen_container: $('#screen_container'),
+      bios: { url: CFG.bios },
+      vga_bios: { url: CFG.vga },
+      cdrom,
+      autostart: true
+    });
+    emu.add_listener('download-progress', e => {
+      if (e.total) status('Downloading ' + (e.file_name || 'file') + ': ' + Math.round(e.loaded / e.total * 100) + '%');
+    });
+    emu.add_listener('emulator-started', () => {
+      running = true;
+      status('Running. Choose the VESA mode entry in the boot menu.');
+      ['fs','mouse','pause','cad','restart'].forEach(i => $('#'+i).disabled = false);
+    });
+  }catch(err){
+    status('Error: ' + err.message);
+    $('#start').style.display = '';
+  }
+}
+
+$('#iso').onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  status('Reading ' + f.name + ' (' + Math.round(f.size/1048576) + ' MB)…');
+  try { boot({ buffer: await f.arrayBuffer() }); }
+  catch { status('Could not read that file. Try a smaller image or a different browser.'); }
+};
+
+if (CFG.hostedIso && CFG.hostedSize){
+  $('#hosted').hidden = false;
+  $('#hosted').onclick = () => boot({ url: CFG.hostedIso, size: CFG.hostedSize, async: true });
+}
+
+$('#fs').onclick = () => emu.screen_go_fullscreen();
+$('#mouse').onclick = () => emu.lock_mouse();
+$('#pause').onclick = e => {
+  if (running){ emu.stop(); running = false; e.target.textContent = 'Resume'; status('Paused.'); }
+  else { emu.run(); running = true; e.target.textContent = 'Pause'; status('Running.'); }
+};
+$('#cad').onclick = () => emu.keyboard_send_scancodes([0x1d,0x38,0xe0,0x53,0xe0,0xd3,0xb8,0x9d]);
+$('#restart').onclick = () => location.reload();
+</script>
+</body>
+</html>
